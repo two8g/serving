@@ -96,7 +96,7 @@ class HttpRestApiHandler {
   }
 
   @POST
-  @Path("/v1/models/{requestPath:([^/:]+)(?:/versions/(\\d+))?:(classify|regress|predict)}")
+  @Path("/v1/models/{requestPath:([^/:]+)(?:/versions/(\\d+))?:(classify|regress|predict|pred)}")
   @Consumes(Array(MediaType.APPLICATION_JSON))
   @Produces(Array(MediaType.APPLICATION_JSON))
   def processPredictionServiceRequest(requestBody: String, @PathParam("requestPath") requestPath: String): Response ={
@@ -104,7 +104,7 @@ class HttpRestApiHandler {
     var modelVersion: String = null
     var modelMethod: String = null
     try {
-      val pattern = new Regex("""([^/:]+)(?:/versions/(\d+))?:(classify|regress|predict)""")
+      val pattern = new Regex("""([^/:]+)(?:/versions/(\d+))?:(classify|regress|predict|pred)""")
       val pattern(_, _, _) = requestPath
       requestPath match {
         case pattern(name, version, method) =>
@@ -124,6 +124,8 @@ class HttpRestApiHandler {
       processClassifyRequest()
     } else if(modelMethod.equals("predict")) {
       output = processPredictRequest(modelName, modelVersion, requestBody)
+    } else if(modelMethod.equals("pred")) {
+      output = processPredRequest(modelName, modelVersion, requestBody)
     } else if(modelMethod.equals("regress")) {
       processRegressRequest()
     } else {
@@ -160,6 +162,35 @@ class HttpRestApiHandler {
       while(iter.hasNext) {
         import scala.collection.JavaConverters._
         results.add(InstanceUtils.getStringKeyMap(iter.next()).asScala)
+      }
+      "{\"predictions\": " + write(results) + "}"
+    } else {
+      "{\"error\": \""+ response.getError + "\"}"
+    }
+  }
+
+  def processPredRequest(modelName: String, modelVersion: String, requestBody: String): String = {
+    val modelSpecBuilder = ModelSpec.newBuilder()
+    modelSpecBuilder.setName(modelName)
+    if(modelVersion !=null && !modelVersion.isEmpty) {
+      modelSpecBuilder.setVersion(Int64Value.newBuilder().setValue(modelVersion.toLong))
+    }
+    val requestBuilder = Request.newBuilder()
+    requestBuilder.setModelSpec(modelSpecBuilder.build())
+    Json2Instances.fillPredictRequestFromJson(requestBody, requestBuilder)
+    val responseBuilder = ResponseProtos.Response.newBuilder()
+    val runOptions = new RunOptions()
+    ServiceImpl.predict(runOptions, ModelServer.getServerCore, requestBuilder.build(), responseBuilder)
+    val response = responseBuilder.build()
+    val resultCount = response.getPredictionsCount
+    if(resultCount > 0) {
+      import scala.collection.mutable
+      val results = new util.ArrayList[mutable.Map[String, _<:Any]]()
+      val iter = response.getPredictionsList.iterator()
+      implicit val formats = org.json4s.DefaultFormats
+      while(iter.hasNext) {
+        val value = InstanceUtils.getStringKeyMap(iter.next())
+        results.add(mutable.Map("pred"->value.get("pred")))
       }
       "{\"predictions\": " + write(results) + "}"
     } else {
